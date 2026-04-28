@@ -2,29 +2,33 @@ import discord
 from discord.ext import commands
 import psycopg2 
 import os
-import re # Added for time parsing
+import re 
 from datetime import datetime, timedelta
+from groq import Groq # Added for AI Insight
 
 # ============================================================================
 # 👑 ADMIN & TESTER PANEL
 # ============================================================================
 ADMIN_USER_ID = 882005122144669707 
 
-# Any User ID in this list can use the bot for FREE in any server.
 TESTER_IDS = [
     882005122144669707, # You
-    # Add other tester Discord IDs here, separated by commas
 ]
 
 # ============================================================================
 # 🔑 CONFIG & DATABASE
 # ============================================================================
 DISCORD_BOT_TOKEN = os.getenv('DISCORD_TOKEN')
+GROQ_API_KEY = os.getenv('GROQ_KEY') # Added for AI
 DB_URL = os.getenv('DATABASE_URL')
+
 conn = psycopg2.connect(DB_URL)
 cursor = conn.cursor()
 
-# Create tables: One for vouches, one for subscriptions
+# Initialize Groq Client
+ai_client = Groq(api_key=GROQ_API_KEY)
+
+# Create tables
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS vouches (
         id SERIAL PRIMARY KEY,
@@ -48,7 +52,6 @@ conn.commit()
 # 🛠️ TIME PARSER HELPER
 # ============================================================================
 def parse_duration(duration_str):
-    """Converts strings like 10m, 2h, 30d, 1mo, 1y into a timedelta object"""
     match = re.match(r"(\d+)([smhdowy])", duration_str.lower())
     if not match:
         match = re.match(r"(\d+)(mo)", duration_str.lower())
@@ -74,7 +77,6 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 def is_authorized(user_id, server_id):
-    """Checks if a user is a tester OR if the server has an active sub"""
     if user_id in TESTER_IDS:
         return True
     
@@ -88,7 +90,7 @@ def is_authorized(user_id, server_id):
 
 @bot.event
 async def on_ready():
-    print(f'🛡️ Vouch Vault (TIME-MASTER MODE) is Online')
+    print(f'🛡️ Vouch Vault (AI-INSIGHT MODE) is Online')
 
 # ============================================================================
 # 👑 ADMIN COMMANDS
@@ -96,7 +98,6 @@ async def on_ready():
 
 @bot.command()
 async def authorize(ctx, server_id: int, duration: str):
-    """Usage: !authorize [ID] 10m OR !authorize [ID] 30d"""
     if ctx.author.id != ADMIN_USER_ID:
         return 
 
@@ -118,7 +119,6 @@ async def authorize(ctx, server_id: int, duration: str):
 
 @bot.command()
 async def clearprofile(ctx, user_id: int):
-    """Clears all vouches for a specific user ID"""
     if ctx.author.id != ADMIN_USER_ID:
         return 
     cursor.execute('DELETE FROM vouches WHERE seller_id = %s', (user_id,))
@@ -152,12 +152,54 @@ async def profile(ctx, user: discord.Member = None):
         return
 
     user = user or ctx.author
+    
+    # 1. Fetch ALL vouches for the AI to analyze
     cursor.execute('SELECT customer_name, content, timestamp FROM vouches WHERE seller_id = %s', (user.id,))
     all_vouches = cursor.fetchall()
-    
-    embed = discord.Embed(title=f"🛡️ Reputation Profile: {user.name}", description=f"Total Vouches: **{len(all_vouches)}**", color=0x4fc3f7)
-    for name, msg, time in reversed(all_vouches[-5:]):
-        embed.add_field(name=f"By {name} on {time}", value=msg, inline=False)
-    await ctx.send(embed=embed)
+    vouch_count = len(all_vouches)
+
+    if vouch_count == 0:
+        await ctx.send(f"🛡️ {user.name} has no vouches in the Vault yet.")
+        return
+
+    async with ctx.typing():
+        try:
+            # 2. Prepare the text for Groq AI
+            vouch_bundle = " ".join([v[1] for v in all_vouches])
+            
+            prompt = f"""
+            Based on these customer reviews, write a 2-sentence professional summary 
+            of this seller's reputation. Focus on their strengths (speed, quality, etc).
+            Reviews: {vouch_bundle[:2000]} 
+            """
+            
+            chat_completion = ai_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.1-8b-instant",
+                temperature=0.3,
+            )
+            ai_summary = chat_completion.choices[0].message.content.strip()
+
+            # 3. Create the Embed with AI Insight
+            embed = discord.Embed(
+                title=f"🛡️ Reputation Profile: {user.name}", 
+                description=f"**AI INSIGHT:**\n*{ai_summary}*",
+                color=0x4fc3f7
+            )
+            
+            embed.add_field(name="📈 Total Reputation", value=f"**{vouch_count} Verified Vouches**", inline=False)
+
+            # Show the 5 most recent vouches
+            recent = all_vouches[-5:]
+            for name, msg, time in reversed(recent):
+                embed.add_field(name=f"By {name} on {time}", value=msg, inline=False)
+
+            embed.set_thumbnail(url=user.avatar.url if user.avatar else None)
+            embed.set_footer(text="Reputation Analyzed by EXTEKK AI Engine")
+            
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            await ctx.send(f"❌ **Error generating AI profile:** {str(e)}")
 
 bot.run(DISCORD_BOT_TOKEN)
