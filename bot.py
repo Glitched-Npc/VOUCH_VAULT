@@ -1,14 +1,15 @@
 import discord
 from discord.ext import commands
-import psycopg2 # Tool for the professional database
+import psycopg2 
 import os
 from datetime import datetime
 
 # ============================================================================
-# 🟢 BUSINESS PANEL
+# 🟢 BUSINESS PANEL (AUTHORIZED SERVERS)
 # ============================================================================
+# Add every Server ID that pays you to this list.
 AUTHORIZED_SERVERS = [
-    1498471543708061727,  # Your Server ID
+    1378864322687537262,  # Your Server ID
 ]
 
 # ============================================================================
@@ -18,7 +19,6 @@ DB_URL = os.getenv('DATABASE_URL')
 conn = psycopg2.connect(DB_URL)
 cursor = conn.cursor()
 
-# Create the table (Postgres version)
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS vouches (
         id SERIAL PRIMARY KEY,
@@ -42,15 +42,16 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f'🛡️ Vouch Vault (PRO) is Online as {bot.user}')
+    print(f'🛡️ Vouch Vault (FULLY SECURED) is Online as {bot.user}')
 
 # ============================================================================
 # ✍️ COMMAND: !vouch @user <message>
 # ============================================================================
 @bot.command()
 async def vouch(ctx, seller: discord.Member, *, message: str):
+    # THE LOCK
     if ctx.guild.id not in AUTHORIZED_SERVERS:
-        await ctx.send("🔒 **Premium Required.** Contact EXTEKK.")
+        await ctx.send("🔒 **Premium Required.** This server is not authorized. Contact **EXTEKK**.")
         return
 
     if seller.id == ctx.author.id:
@@ -58,7 +59,6 @@ async def vouch(ctx, seller: discord.Member, *, message: str):
         return
 
     time_now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    
     cursor.execute('''
         INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id)
         VALUES (%s, %s, %s, %s, %s, %s)
@@ -75,11 +75,14 @@ async def vouch(ctx, seller: discord.Member, *, message: str):
 # ============================================================================
 @bot.command()
 async def profile(ctx, user: discord.Member = None):
+    # THE LOCK (Adding this makes the whole bot private)
+    if ctx.guild.id not in AUTHORIZED_SERVERS:
+        await ctx.send("🔒 **Premium Required.** This server is not authorized. Contact **EXTEKK**.")
+        return
+
     user = user or ctx.author
-    
     cursor.execute('SELECT customer_name, content, timestamp FROM vouches WHERE seller_id = %s', (user.id,))
     all_vouches = cursor.fetchall()
-    
     vouch_count = len(all_vouches)
 
     embed = discord.Embed(
