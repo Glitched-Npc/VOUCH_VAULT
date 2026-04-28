@@ -195,7 +195,7 @@ async def profile(ctx, user: discord.Member = None):
                 embed.add_field(name=f"By {name} on {time}", value=msg, inline=False)
 
             embed.set_thumbnail(url=user.avatar.url if user.avatar else None)
-            embed.set_footer(text="Reputation Analyzed by EXTEKK AI Engine")
+            embed.set_footer(text="Reputation Analyzed by The Silk Labz AI Engine")
             
             await ctx.send(embed=embed)
 
