@@ -52,6 +52,7 @@ conn.commit()
 # 🛠️ TIME PARSER HELPER
 # ============================================================================
 def parse_duration(duration_str):
+    """Converts strings like 10m, 2h, 30d, 1mo, 1y into a timedelta object"""
     match = re.match(r"(\d+)([smhdowy])", duration_str.lower())
     if not match:
         match = re.match(r"(\d+)(mo)", duration_str.lower())
@@ -77,6 +78,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 def is_authorized(user_id, server_id):
+    """Checks if a user is a tester OR if the server has an active sub"""
     if user_id in TESTER_IDS:
         return True
     
@@ -98,6 +100,7 @@ async def on_ready():
 
 @bot.command()
 async def authorize(ctx, server_id: int, duration: str):
+    """Usage: !authorize [ID] 10m OR !authorize [ID] 30d"""
     if ctx.author.id != ADMIN_USER_ID:
         return 
 
@@ -119,6 +122,7 @@ async def authorize(ctx, server_id: int, duration: str):
 
 @bot.command()
 async def clearprofile(ctx, user_id: int):
+    """Clears all vouches for a specific user ID"""
     if ctx.author.id != ADMIN_USER_ID:
         return 
     cursor.execute('DELETE FROM vouches WHERE seller_id = %s', (user_id,))
@@ -167,16 +171,20 @@ async def profile(ctx, user: discord.Member = None):
             # 2. Prepare the text for Groq AI
             vouch_bundle = " ".join([v[1] for v in all_vouches])
             
+            # REVISED PROMPT: Strict instructions to prevent chatter and keep it to 2 sentences
             prompt = f"""
-            Based on these customer reviews, write a 2-sentence professional summary 
-            of this seller's reputation. Focus on their strengths (speed, quality, etc).
+            System: You are a professional reputation analyst. 
+            Instruction: Based on these reviews, provide a STRICT 2-sentence professional summary of the seller's reputation. 
+            Constraint: Do NOT include any introductory phrases like 'Here is a summary' or 'Based on the reviews'. 
+            Constraint: Output ONLY the two sentences of analysis.
+            
             Reviews: {vouch_bundle[:2000]} 
             """
             
             chat_completion = ai_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="llama-3.1-8b-instant",
-                temperature=0.3,
+                temperature=0.1, # Lowered for more strict adherence to instructions
             )
             ai_summary = chat_completion.choices[0].message.content.strip()
 
