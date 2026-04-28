@@ -212,7 +212,7 @@ async def profile(ctx, user: discord.Member = None):
                 embed.add_field(name=f"✅ {name} ({time})", value=msg, inline=False)
 
             embed.set_thumbnail(url=user.avatar.url if user.avatar else None)
-            embed.set_footer(text="Verified & Analyzed by The Silk Labz AI Engine")
+            embed.set_footer(text="Verified & Analyzed by The Silk Road AI Engine")
             
             await ctx.send(embed=embed)
 
