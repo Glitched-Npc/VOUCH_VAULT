@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 # 🔑 CONFIG
 # ============================================================================
 DISCORD_BOT_TOKEN = os.getenv('DISCORD_TOKEN')
-ADMIN_USER_ID = 123456789012345678 # <--- YOUR PERSONAL DISCORD USER ID
+ADMIN_USER_ID = 882005122144669707 # <--- YOUR PERSONAL DISCORD USER ID
 
 DB_URL = os.getenv('DATABASE_URL')
 conn = psycopg2.connect(DB_URL)
