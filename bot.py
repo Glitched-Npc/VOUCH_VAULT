@@ -10,7 +10,7 @@ import threading
 # 🔑 CONFIG & DATABASE
 # ============================================================================
 DISCORD_BOT_TOKEN = os.getenv('DISCORD_TOKEN')
-ADMIN_USER_ID = 1378864322687537262  # <--- YOUR DISCORD USER ID
+ADMIN_USER_ID = 882005122144669707  # <--- YOUR DISCORD USER ID
 WEBHOOK_SECRET = "MY_SUPER_SECRET_KEY_123" 
 
 DB_URL = os.getenv('DATABASE_URL')
