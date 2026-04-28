@@ -12,7 +12,7 @@ from groq import Groq
 ADMIN_USER_ID = 882005122144669707 
 
 TESTER_IDS = [
-    882005122144669707, # You
+    882005122144669707, 
 ]
 
 # ============================================================================
@@ -90,7 +90,7 @@ def is_authorized(user_id, server_id):
 
 @bot.event
 async def on_ready():
-    print(f'🛡️ Vouch Vault (AI-PRO MODE) is Online')
+    print(f'🛡️ Vouch Vault (AI-INSIGHT MODE) is Online')
 
 # ============================================================================
 # 👑 ADMIN COMMANDS
@@ -131,41 +131,54 @@ async def clearprofile(ctx, user_id: int):
 
 @bot.command()
 async def vouch(ctx, seller: discord.Member, *, message: str):
+    # Check Subscription
     if not is_authorized(ctx.author.id, ctx.guild.id):
         await ctx.send("🔒 **Subscription Expired.** $6.99/mo required. Contact **The Silk Road**.")
         return
 
+    # Check Self-Vouching
     if seller.id == ctx.author.id:
         await ctx.send("❌ You cannot vouch for yourself.")
         return
 
+    # SAVE TO DATABASE
+    time_now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    cursor.execute('''
+        INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) 
+        VALUES (%s, %s, %s, %s, %s, %s)
+    ''', (seller.id, ctx.author.id, ctx.author.name, message, time_now, ctx.guild.id))
+    conn.commit()
+
+    # SEND VOUCH EMBED
+    await ctx.send(embed=discord.Embed(title="✨ Vouch Recorded", description=f"```{message}```", color=0x81c784))
+
+    # --- NEW AI THANK YOU FEATURE ---
     async with ctx.typing():
-        # --- AI SCAM SHIELD ---
-        filter_prompt = f"Analyze this Discord vouch: '{message}'. Is this a genuine vouch, or is it obvious spam, a troll, or hateful? Answer with ONLY 'GENUINE' or 'SPAM'."
-        filter_check = ai_client.chat.completions.create(
-            messages=[{"role": "user", "content": filter_prompt}],
-            model="llama-3.1-8b-instant",
-        )
-        if "SPAM" in filter_check.choices[0].message.content.upper():
-            await ctx.send("⚠️ **AI Scanned:** This vouch was flagged as spam or low-quality and was not recorded.")
-            return
-
-        # --- SAVE TO DATABASE ---
-        time_now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        cursor.execute('INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) VALUES (%s, %s, %s, %s, %s, %s)', (seller.id, ctx.author.id, ctx.author.name, message, time_now, ctx.guild.id))
-        conn.commit()
-
-        await ctx.send(embed=discord.Embed(title="✨ AI Verified: Vouch Recorded", description=f"```{message}```", color=0x81c784))
+        try:
+            # Generate a unique AI thank you message
+            thanks_prompt = f"System: You are a friendly AI for 'The Silk Road' community. Instruction: Write a one-sentence, enthusiastic thank you message to {ctx.author.name} for leaving a vouch for {seller.name}. Keep it short and professional."
+            
+            thanks_completion = ai_client.chat.completions.create(
+                messages=[{"role": "user", "content": thanks_prompt}],
+                model="llama-3.1-8b-instant",
+                temperature=0.7,
+            )
+            thanks_msg = thanks_completion.choices[0].message.content.strip()
+            
+            # Send the AI thank you in a clean embed
+            thank_embed = discord.Embed(description=f"💬 **AI Message:** {thanks_msg}", color=0x4fc3f7)
+            await ctx.send(embed=thank_embed)
+        except:
+            pass # If AI fails, just skip the thank you message
 
 @bot.command()
 async def profile(ctx, user: discord.Member = None):
     if not is_authorized(ctx.author.id, ctx.guild.id):
-        await ctx.send("🔒 **Subscription Required.** Contact **The Silk Road**.")
+        await ctx.send("🔒 **Subscription Expired.** $6.99/mo required. Contact **The Silk Road**.")
         return
 
     user = user or ctx.author
     
-    # 1. Fetch Vouch Data
     cursor.execute('SELECT customer_name, content, timestamp FROM vouches WHERE seller_id = %s', (user.id,))
     all_vouches = cursor.fetchall()
     vouch_count = len(all_vouches)
@@ -174,17 +187,14 @@ async def profile(ctx, user: discord.Member = None):
         await ctx.send(f"🛡️ {user.name} has no vouches in the Vault yet.")
         return
 
-    # 2. Fetch Unique Server Data (Global Reach)
     cursor.execute('SELECT COUNT(DISTINCT origin_server_id) FROM vouches WHERE seller_id = %s', (user.id,))
     unique_servers = cursor.fetchone()[0]
 
-    # 3. Calculate Trust Score (Max 100)
     trust_score = (unique_servers * 10) + vouch_count
     if trust_score > 100: trust_score = 100
 
     async with ctx.typing():
         try:
-            # 4. Generate AI Insight
             vouch_bundle = " ".join([v[1] for v in all_vouches])
             prompt = f"System: Professional reputation analyst. Instruction: Based on these reviews, provide a STRICT 2-sentence summary of the seller's reputation. Constraint: Output ONLY the two sentences. Reviews: {vouch_bundle[:2000]}"
             
@@ -195,7 +205,6 @@ async def profile(ctx, user: discord.Member = None):
             )
             ai_summary = chat_completion.choices[0].message.content.strip()
 
-            # 5. Create Premium Profile Embed
             embed = discord.Embed(
                 title=f"🛡️ Reputation Profile: {user.name}", 
                 description=f"**AI INSIGHT:**\n*{ai_summary}*",
@@ -206,10 +215,9 @@ async def profile(ctx, user: discord.Member = None):
             embed.add_field(name="🌐 Global Reach", value=f"**{unique_servers}** Servers", inline=True)
             embed.add_field(name="📈 Total Reputation", value=f"**{vouch_count}** Vouches", inline=True)
 
-            # Show the 5 most recent vouches
             recent = all_vouches[-5:]
             for name, msg, time in reversed(recent):
-                embed.add_field(name=f"✅ {name} ({time})", value=msg, inline=False)
+                embed.add_field(name=f"By {name} on {time}", value=msg, inline=False)
 
             embed.set_thumbnail(url=user.avatar.url if user.avatar else None)
             embed.set_footer(text="Verified & Analyzed by The Silk Road AI Engine")
