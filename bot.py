@@ -2,14 +2,24 @@ import discord
 from discord.ext import commands
 import psycopg2 
 import os
+import re # Added for time parsing
 from datetime import datetime, timedelta
 
 # ============================================================================
-# 🔑 CONFIG
+# 👑 ADMIN & TESTER PANEL
+# ============================================================================
+ADMIN_USER_ID = 882005122144669707 
+
+# Any User ID in this list can use the bot for FREE in any server.
+TESTER_IDS = [
+    882005122144669707, # You
+    # Add other tester Discord IDs here, separated by commas
+]
+
+# ============================================================================
+# 🔑 CONFIG & DATABASE
 # ============================================================================
 DISCORD_BOT_TOKEN = os.getenv('DISCORD_TOKEN')
-ADMIN_USER_ID = 882005122144669707 # <--- YOUR PERSONAL DISCORD USER ID
-
 DB_URL = os.getenv('DATABASE_URL')
 conn = psycopg2.connect(DB_URL)
 cursor = conn.cursor()
@@ -35,14 +45,39 @@ cursor.execute('''
 conn.commit()
 
 # ============================================================================
-# 🤖 BOT SETUP & HELPER
+# 🛠️ TIME PARSER HELPER
+# ============================================================================
+def parse_duration(duration_str):
+    """Converts strings like 10m, 2h, 30d, 1mo, 1y into a timedelta object"""
+    match = re.match(r"(\d+)([smhdowy])", duration_str.lower())
+    if not match:
+        match = re.match(r"(\d+)(mo)", duration_str.lower())
+        if not match: return None
+
+    amount, unit = match.groups()
+    amount = int(amount)
+
+    if unit == 's': return timedelta(seconds=amount)
+    if unit == 'm': return timedelta(minutes=amount)
+    if unit == 'h': return timedelta(hours=amount)
+    if unit == 'd': return timedelta(days=amount)
+    if unit == 'w': return timedelta(weeks=amount)
+    if unit == 'mo': return timedelta(days=amount * 30)
+    if unit == 'y': return timedelta(days=amount * 365)
+    return None
+
+# ============================================================================
+# 🤖 BOT SETUP & HELPERS
 # ============================================================================
 intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-def check_subscription(server_id):
-    """Returns True if the server has an active subscription"""
+def is_authorized(user_id, server_id):
+    """Checks if a user is a tester OR if the server has an active sub"""
+    if user_id in TESTER_IDS:
+        return True
+    
     cursor.execute('SELECT expiry_date FROM subscriptions WHERE server_id = %s', (server_id,))
     result = cursor.fetchone()
     if result:
@@ -53,17 +88,24 @@ def check_subscription(server_id):
 
 @bot.event
 async def on_ready():
-    print(f'🛡️ Vouch Vault (SUBSCRIPTION MODE) is Online')
+    print(f'🛡️ Vouch Vault (TIME-MASTER MODE) is Online')
 
 # ============================================================================
-# 👑 ADMIN COMMAND: !authorize <server_id> <days>
+# 👑 ADMIN COMMANDS
 # ============================================================================
+
 @bot.command()
-async def authorize(ctx, server_id: int, days: int):
+async def authorize(ctx, server_id: int, duration: str):
+    """Usage: !authorize [ID] 10m OR !authorize [ID] 30d"""
     if ctx.author.id != ADMIN_USER_ID:
-        return # Only you can use this
+        return 
 
-    new_expiry = datetime.now() + timedelta(days=days)
+    time_diff = parse_duration(duration)
+    if time_diff is None:
+        await ctx.send("❌ **Invalid Format!** Use `10m`, `2h`, `7d`, `1mo`, or `1y`.")
+        return
+
+    new_expiry = datetime.now() + time_diff
     
     cursor.execute('''
         INSERT INTO subscriptions (server_id, expiry_date)
@@ -72,14 +114,24 @@ async def authorize(ctx, server_id: int, days: int):
     ''', (server_id, new_expiry))
     conn.commit()
 
-    await ctx.send(f"✅ **Authorized!** Server `{server_id}` now has `{days}` days of Premium.")
+    await ctx.send(f"✅ **Authorized!** Server `{server_id}` Premium until: `{new_expiry.strftime('%Y-%m-%d %H:%M:%S')}`")
+
+@bot.command()
+async def clearprofile(ctx, user_id: int):
+    """Clears all vouches for a specific user ID"""
+    if ctx.author.id != ADMIN_USER_ID:
+        return 
+    cursor.execute('DELETE FROM vouches WHERE seller_id = %s', (user_id,))
+    conn.commit()
+    await ctx.send(f"🧹 **Cleared!** All vouches for User ID `{user_id}` have been removed.")
 
 # ============================================================================
-# ✍️ COMMAND: !vouch
+# ✍️ MAIN COMMANDS
 # ============================================================================
+
 @bot.command()
 async def vouch(ctx, seller: discord.Member, *, message: str):
-    if not check_subscription(ctx.guild.id):
+    if not is_authorized(ctx.author.id, ctx.guild.id):
         await ctx.send("🔒 **Subscription Expired.** $6.99/mo required. Contact **The Silk Road**.")
         return
 
@@ -93,12 +145,9 @@ async def vouch(ctx, seller: discord.Member, *, message: str):
 
     await ctx.send(embed=discord.Embed(title="✨ Vouch Recorded", description=f"```{message}```", color=0x81c784))
 
-# ============================================================================
-# 📊 COMMAND: !profile
-# ============================================================================
 @bot.command()
 async def profile(ctx, user: discord.Member = None):
-    if not check_subscription(ctx.guild.id):
+    if not is_authorized(ctx.author.id, ctx.guild.id):
         await ctx.send("🔒 **Subscription Expired.** $6.99/mo required. Contact **The Silk Road**.")
         return
 
