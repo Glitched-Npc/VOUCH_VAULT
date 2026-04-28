@@ -10,6 +10,7 @@ from datetime import datetime
 # Add every Server ID that pays you to this list.
 AUTHORIZED_SERVERS = [
     1378864322687537262,  # Your Server ID
+    1498666045500821504,  # Testing server
 ]
 
 # ============================================================================
