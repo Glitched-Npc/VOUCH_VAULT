@@ -51,7 +51,7 @@ async def on_ready():
 async def vouch(ctx, seller: discord.Member, *, message: str):
     # THE LOCK
     if ctx.guild.id not in AUTHORIZED_SERVERS:
-        await ctx.send("🔒 **Premium Required.** This server is not authorized. Contact **EXTEKK**.")
+        await ctx.send("🔒 **Premium Required.** This server is not authorized. Contact **The Silk Road**.")
         return
 
     if seller.id == ctx.author.id:
@@ -77,7 +77,7 @@ async def vouch(ctx, seller: discord.Member, *, message: str):
 async def profile(ctx, user: discord.Member = None):
     # THE LOCK (Adding this makes the whole bot private)
     if ctx.guild.id not in AUTHORIZED_SERVERS:
-        await ctx.send("🔒 **Premium Required.** This server is not authorized. Contact **EXTEKK**.")
+        await ctx.send("🔒 **Premium Required.** This server is not authorized. Contact **The Silk Road**.")
         return
 
     user = user or ctx.author
