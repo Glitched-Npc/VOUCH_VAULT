@@ -10,10 +10,7 @@ from groq import Groq
 # 👑 ADMIN & TESTER PANEL
 # ============================================================================
 ADMIN_USER_ID = 882005122144669707 
-
-TESTER_IDS = [
-    882005122144669707, 
-]
+TESTER_IDS = [882005122144669707]
 
 # ============================================================================
 # 🔑 CONFIG & DATABASE
@@ -24,11 +21,8 @@ DB_URL = os.getenv('DATABASE_URL')
 
 conn = psycopg2.connect(DB_URL)
 cursor = conn.cursor()
-
-# Initialize Groq Client
 ai_client = Groq(api_key=GROQ_API_KEY)
 
-# Create tables
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS vouches (
         id SERIAL PRIMARY KEY,
@@ -40,26 +34,19 @@ cursor.execute('''
         origin_server_id BIGINT
     )
 ''')
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS subscriptions (
-        server_id BIGINT PRIMARY KEY,
-        expiry_date TIMESTAMP
-    )
-''')
+cursor.execute('CREATE TABLE IF NOT EXISTS subscriptions (server_id BIGINT PRIMARY KEY, expiry_date TIMESTAMP)')
 conn.commit()
 
 # ============================================================================
-# 🛠️ TIME PARSER HELPER
+# 🛠️ HELPERS
 # ============================================================================
 def parse_duration(duration_str):
     match = re.match(r"(\d+)([smhdowy])", duration_str.lower())
     if not match:
         match = re.match(r"(\d+)(mo)", duration_str.lower())
         if not match: return None
-
     amount, unit = match.groups()
     amount = int(amount)
-
     if unit == 's': return timedelta(seconds=amount)
     if unit == 'm': return timedelta(minutes=amount)
     if unit == 'h': return timedelta(hours=amount)
@@ -69,162 +56,138 @@ def parse_duration(duration_str):
     if unit == 'y': return timedelta(days=amount * 365)
     return None
 
+def is_authorized(user_id, server_id):
+    if user_id in TESTER_IDS: return True
+    cursor.execute('SELECT expiry_date FROM subscriptions WHERE server_id = %s', (server_id,))
+    result = cursor.fetchone()
+    if result and datetime.now() < result[0]: return True
+    return False
+
 # ============================================================================
-# 🤖 BOT SETUP & HELPERS
+# 🤖 BOT SETUP
 # ============================================================================
 intents = discord.Intents.default()
 intents.message_content = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-def is_authorized(user_id, server_id):
-    if user_id in TESTER_IDS:
-        return True
-    
-    cursor.execute('SELECT expiry_date FROM subscriptions WHERE server_id = %s', (server_id,))
-    result = cursor.fetchone()
-    if result:
-        expiry = result[0]
-        if datetime.now() < expiry:
-            return True
-    return False
-
 @bot.event
 async def on_ready():
-    print(f'🛡️ Vouch Vault (AI-INSIGHT MODE) is Online')
+    print(f'🛡️ Vouch Vault (PRO MIGRATION) is Online')
+
+# ============================================================================
+# 📥 MIGRATION COMMAND: !import #channel @Seller
+# ============================================================================
+@bot.command()
+async def import_vouches(ctx, channel: discord.TextChannel, seller: discord.Member):
+    """Imports the last 100 messages from a channel as vouches for a seller"""
+    if ctx.author.id != ADMIN_USER_ID:
+        return
+
+    await ctx.send(f"⏳ **Starting Migration...** Reading history from {channel.mention}. This may take a moment.")
+    
+    count = 0
+    # Keywords that suggest a message is a vouch
+    keywords = ["vouch", "legit", "fast", "+1", "delivered", "received", "thanks", "bought"]
+
+    async for message in channel.history(limit=100):
+        # Skip the bot's own messages and messages from the seller
+        if message.author == bot.user or message.author.id == seller.id:
+            continue
+
+        # Check if the message contains vouch-like text
+        content_lower = message.content.lower()
+        if any(key in content_lower for key in keywords) or len(message.content) > 5:
+            
+            time_str = message.created_at.strftime("%Y-%m-%d %H:%M")
+            
+            # Save to PostgreSQL
+            cursor.execute('''
+                INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) 
+                VALUES (%s, %s, %s, %s, %s, %s)
+            ''', (seller.id, message.author.id, message.author.name, message.content, time_str, ctx.guild.id))
+            count += 1
+
+    conn.commit()
+    await ctx.send(f"✅ **Migration Complete!** Successfully added **{count}** old vouches into the Global Vault for {seller.mention}.")
 
 # ============================================================================
 # 👑 ADMIN COMMANDS
 # ============================================================================
-
 @bot.command()
 async def authorize(ctx, server_id: int, duration: str):
-    if ctx.author.id != ADMIN_USER_ID:
-        return 
-
+    if ctx.author.id != ADMIN_USER_ID: return 
     time_diff = parse_duration(duration)
     if time_diff is None:
-        await ctx.send("❌ **Invalid Format!** Use `10m`, `2h`, `7d`, `1mo`, or `1y`.")
+        await ctx.send("❌ Use `10m`, `1h`, `30d`, etc.")
         return
-
     new_expiry = datetime.now() + time_diff
-    
-    cursor.execute('''
-        INSERT INTO subscriptions (server_id, expiry_date)
-        VALUES (%s, %s)
-        ON CONFLICT (server_id) DO UPDATE SET expiry_date = EXCLUDED.expiry_date
-    ''', (server_id, new_expiry))
+    cursor.execute('INSERT INTO subscriptions (server_id, expiry_date) VALUES (%s, %s) ON CONFLICT (server_id) DO UPDATE SET expiry_date = EXCLUDED.expiry_date', (server_id, new_expiry))
     conn.commit()
-
-    await ctx.send(f"✅ **Authorized!** Server `{server_id}` Premium until: `{new_expiry.strftime('%Y-%m-%d %H:%M:%S')}`")
+    await ctx.send(f"✅ **Authorized!** Server `{server_id}` until `{new_expiry}`")
 
 @bot.command()
 async def clearprofile(ctx, user_id: int):
-    if ctx.author.id != ADMIN_USER_ID:
-        return 
+    if ctx.author.id != ADMIN_USER_ID: return 
     cursor.execute('DELETE FROM vouches WHERE seller_id = %s', (user_id,))
     conn.commit()
-    await ctx.send(f"🧹 **Cleared!** All vouches for User ID `{user_id}` have been removed.")
+    await ctx.send(f"🧹 Cleared all vouches for `{user_id}`.")
 
 # ============================================================================
 # ✍️ MAIN COMMANDS
 # ============================================================================
-
 @bot.command()
 async def vouch(ctx, seller: discord.Member, *, message: str):
-    # Check Subscription
     if not is_authorized(ctx.author.id, ctx.guild.id):
-        await ctx.send("🔒 **Subscription Expired.** $6.99/mo required. Contact **The Silk Road**.")
+        await ctx.send("🔒 **Subscription Expired.** $3.99/mo required. Contact **The Silk Road**.")
         return
-
-    # Check Self-Vouching
     if seller.id == ctx.author.id:
-        await ctx.send("❌ You cannot vouch for yourself.")
+        await ctx.send("❌ Self-vouching is disabled.")
         return
 
-    # SAVE TO DATABASE
     time_now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    cursor.execute('''
-        INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) 
-        VALUES (%s, %s, %s, %s, %s, %s)
-    ''', (seller.id, ctx.author.id, ctx.author.name, message, time_now, ctx.guild.id))
+    cursor.execute('INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) VALUES (%s, %s, %s, %s, %s, %s)', (seller.id, ctx.author.id, ctx.author.name, message, time_now, ctx.guild.id))
     conn.commit()
-
-    # SEND VOUCH EMBED
     await ctx.send(embed=discord.Embed(title="✨ Vouch Recorded", description=f"```{message}```", color=0x81c784))
 
-    # --- NEW AI THANK YOU FEATURE ---
-    async with ctx.typing():
-        try:
-            # Generate a unique AI thank you message
-            thanks_prompt = f"System: You are a friendly AI for 'The Silk Road' community. Instruction: Write a one-sentence, enthusiastic thank you message to {ctx.author.name} for leaving a vouch for {seller.name}. Keep it short and professional."
-            
-            thanks_completion = ai_client.chat.completions.create(
-                messages=[{"role": "user", "content": thanks_prompt}],
-                model="llama-3.1-8b-instant",
-                temperature=0.7,
-            )
-            thanks_msg = thanks_completion.choices[0].message.content.strip()
-            
-            # Send the AI thank you in a clean embed
-            thank_embed = discord.Embed(description=f"💬 **AI Message:** {thanks_msg}", color=0x4fc3f7)
-            await ctx.send(embed=thank_embed)
-        except:
-            pass # If AI fails, just skip the thank you message
+    # AI Thank You
+    try:
+        thanks_prompt = f"System: Friendly AI. Instruction: One-sentence thank you to {ctx.author.name} for vouching for {seller.name}."
+        thanks_completion = ai_client.chat.completions.create(messages=[{"role": "user", "content": thanks_prompt}], model="llama-3.1-8b-instant", temperature=0.7)
+        await ctx.send(embed=discord.Embed(description=f"💬 **AI:** {thanks_completion.choices[0].message.content.strip()}", color=0x4fc3f7))
+    except: pass
 
 @bot.command()
 async def profile(ctx, user: discord.Member = None):
     if not is_authorized(ctx.author.id, ctx.guild.id):
-        await ctx.send("🔒 **Subscription Expired.** $6.99/mo required. Contact **The Silk Road**.")
+        await ctx.send("🔒 **Subscription Expired.**")
         return
-
     user = user or ctx.author
-    
     cursor.execute('SELECT customer_name, content, timestamp FROM vouches WHERE seller_id = %s', (user.id,))
     all_vouches = cursor.fetchall()
     vouch_count = len(all_vouches)
-
     if vouch_count == 0:
-        await ctx.send(f"🛡️ {user.name} has no vouches in the Vault yet.")
+        await ctx.send("🛡️ No vouches found.")
         return
 
     cursor.execute('SELECT COUNT(DISTINCT origin_server_id) FROM vouches WHERE seller_id = %s', (user.id,))
     unique_servers = cursor.fetchone()[0]
-
-    trust_score = (unique_servers * 10) + vouch_count
-    if trust_score > 100: trust_score = 100
+    trust_score = min((unique_servers * 10) + vouch_count, 100)
 
     async with ctx.typing():
         try:
             vouch_bundle = " ".join([v[1] for v in all_vouches])
-            prompt = f"System: Professional reputation analyst. Instruction: Based on these reviews, provide a STRICT 2-sentence summary of the seller's reputation. Constraint: Output ONLY the two sentences. Reviews: {vouch_bundle[:2000]}"
-            
-            chat_completion = ai_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="llama-3.1-8b-instant",
-                temperature=0.1,
-            )
-            ai_summary = chat_completion.choices[0].message.content.strip()
+            prompt = f"System: Professional analyst. Instruction: STRICT 2-sentence summary of seller reputation. No intro. Reviews: {vouch_bundle[:2000]}"
+            chat = ai_client.chat.completions.create(messages=[{"role": "user", "content": prompt}], model="llama-3.1-8b-instant", temperature=0.1)
+            ai_summary = chat.choices[0].message.content.strip()
 
-            embed = discord.Embed(
-                title=f"🛡️ Reputation Profile: {user.name}", 
-                description=f"**AI INSIGHT:**\n*{ai_summary}*",
-                color=0x4fc3f7
-            )
-            
+            embed = discord.Embed(title=f"🛡️ Profile: {user.name}", description=f"**AI INSIGHT:**\n*{ai_summary}*", color=0x4fc3f7)
             embed.add_field(name="🛡️ Trust Score", value=f"**{trust_score}/100**", inline=True)
             embed.add_field(name="🌐 Global Reach", value=f"**{unique_servers}** Servers", inline=True)
-            embed.add_field(name="📈 Total Reputation", value=f"**{vouch_count}** Vouches", inline=True)
-
-            recent = all_vouches[-5:]
-            for name, msg, time in reversed(recent):
-                embed.add_field(name=f"By {name} on {time}", value=msg, inline=False)
-
-            embed.set_thumbnail(url=user.avatar.url if user.avatar else None)
-            embed.set_footer(text="Verified & Analyzed by The Silk Road AI Engine")
-            
+            embed.add_field(name="📈 Total", value=f"**{vouch_count}** Vouches", inline=True)
+            for name, msg, time in reversed(all_vouches[-5:]):
+                embed.add_field(name=f"✅ {name} ({time})", value=msg, inline=False)
+            embed.set_footer(text="Verified & Analyzed by The Silk Road AI")
             await ctx.send(embed=embed)
-
-        except Exception as e:
-            await ctx.send(f"❌ **Error generating AI profile:** {str(e)}")
+        except Exception as e: await ctx.send(f"❌ Error: {str(e)}")
 
 bot.run(DISCORD_BOT_TOKEN)
