@@ -77,38 +77,50 @@ async def on_ready():
 # ============================================================================
 # 📥 MIGRATION COMMAND: !import #channel @Seller
 # ============================================================================
-@bot.command()
+@bot.command(name="import_vouches", aliases=["import"])
 async def import_vouches(ctx, channel: discord.TextChannel, seller: discord.Member):
     """Imports the last 100 messages from a channel as vouches for a seller"""
+    
+    # 1. Check if the person typing is the actual owner
     if ctx.author.id != ADMIN_USER_ID:
+        await ctx.send(f"❌ **Unauthorized:** Your ID ({ctx.author.id}) does not match the Admin ID.")
         return
 
-    await ctx.send(f"⏳ **Starting Migration...** Reading history from {channel.mention}. This may take a moment.")
+    await ctx.send(f"⏳ **Scanning {channel.mention}...** This reads the last 100 messages. Please wait.")
     
     count = 0
-    # Keywords that suggest a message is a vouch
-    keywords = ["vouch", "legit", "fast", "+1", "delivered", "received", "thanks", "bought"]
+    keywords = ["vouch", "legit", "fast", "+1", "delivered", "received", "thanks", "bought", "🔥", "✅"]
 
-    async for message in channel.history(limit=100):
-        # Skip the bot's own messages and messages from the seller
-        if message.author == bot.user or message.author.id == seller.id:
-            continue
+    try:
+        async for message in channel.history(limit=100):
+            # Skip bot and skip the seller themselves
+            if message.author.bot or message.author.id == seller.id:
+                continue
 
-        # Check if the message contains vouch-like text
-        content_lower = message.content.lower()
-        if any(key in content_lower for key in keywords) or len(message.content) > 5:
+            content_lower = message.content.lower()
             
-            time_str = message.created_at.strftime("%Y-%m-%d %H:%M")
-            
-            # Save to PostgreSQL
-            cursor.execute('''
-                INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) 
-                VALUES (%s, %s, %s, %s, %s, %s)
-            ''', (seller.id, message.author.id, message.author.name, message.content, time_str, ctx.guild.id))
-            count += 1
+            # Check if message is a vouch (has keywords, length, or an image)
+            is_vouch = (
+                any(key in content_lower for key in keywords) or 
+                len(message.content) > 10 or 
+                len(message.attachments) > 0
+            )
 
-    conn.commit()
-    await ctx.send(f"✅ **Migration Complete!** Successfully added **{count}** old vouches into the Global Vault for {seller.mention}.")
+            if is_vouch:
+                time_str = message.created_at.strftime("%Y-%m-%d %H:%M")
+                
+                # Save to PostgreSQL
+                cursor.execute('''
+                    INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) 
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                ''', (seller.id, message.author.id, message.author.name, message.content or "[Image/No Text]", time_str, ctx.guild.id))
+                count += 1
+
+        conn.commit()
+        await ctx.send(f"✅ **Migration Complete!** Added **{count}** vouches for {seller.mention} to the Vault.")
+    
+    except Exception as e:
+        await ctx.send(f"❌ **Critical Error:** {str(e)}")
 
 # ============================================================================
 # 👑 ADMIN COMMANDS
