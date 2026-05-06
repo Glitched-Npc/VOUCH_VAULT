@@ -26,7 +26,8 @@ def get_db_connection():
     return psycopg2.connect(DB_URL)
 
 def is_premium(server_id):
-    """Returns True if server has a paid sub. Always True for Admin/Testers."""
+    """Returns True if the server has an active subscription"""
+    if not server_id: return False
     try:
         conn = get_db_connection(); cursor = conn.cursor()
         cursor.execute('SELECT expiry_date FROM subscriptions WHERE server_id = %s', (server_id,))
@@ -73,7 +74,7 @@ async def on_ready():
     print(f'✅ Vouch Vault Master Freemium Online')
 
 # ============================================================================
-# 📊 PROFILE COMMAND (The Freemium Showpiece)
+# 📊 PROFILE COMMAND (FREE FOR ALL | PREMIUM AI)
 # ============================================================================
 @bot.command()
 async def profile(ctx, user: discord.Member = None):
@@ -84,7 +85,7 @@ async def profile(ctx, user: discord.Member = None):
     cursor.execute('SELECT reason FROM global_blacklist WHERE user_id = %s', (user.id,))
     blacklisted = cursor.fetchone()
     if blacklisted:
-        await ctx.send(embed=discord.Embed(title="🚨 GLOBAL BLACKLISTED", description=f"WARNING: {user.mention} is flagged for: {blacklisted[0]}", color=0xFF0000))
+        await ctx.send(embed=discord.Embed(title="🚨 GLOBAL BLACKLISTED", description=f"WARNING: {user.mention} is flagged for scamming!", color=0xFF0000))
         cursor.close(); conn.close(); return
 
     cursor.execute('SELECT content FROM vouches WHERE seller_id = %s', (user.id,))
@@ -95,13 +96,12 @@ async def profile(ctx, user: discord.Member = None):
     reach = cursor.fetchone()[0]
     cursor.close(); conn.close()
 
-    # Ranking for General Users (Free Status)
     rank = "Newcomer"
     if given > 50: rank = "Legendary Supporter 💎"
     elif given > 20: rank = "Elite Supporter 🎖️"
     elif given > 5: rank = "Verified Supporter ✅"
 
-    embed = discord.Embed(title=f"🛡️ Global Identity: {user.name}", color=0x4fc3f7)
+    embed = discord.Embed(title=f"🛡️ Global Profile: {user.name}", color=0x4fc3f7)
     embed.add_field(name="🤝 COMMUNITY STATUS", value=f"**Rank:** {rank}\n**Vouches Given:** {given}", inline=True)
     embed.add_field(name="💰 SELLER STATUS", value=f"**Total Vouches:** {len(received)}\n**Global Reach:** {reach} Servers", inline=True)
 
@@ -109,30 +109,30 @@ async def profile(ctx, user: discord.Member = None):
         async with ctx.typing():
             try:
                 bundle = " ".join([v[0] for v in received])
-                p = f"System: Professional analyst. Instruction: STRICT 2-sentence summary of seller reputation. No intro. Reviews: {bundle[:2000]}"
+                p = f"System: Professional analyst. Instruction: STRICT 2-sentence summary of reputation. Reviews: {bundle[:2000]}"
                 c = ai_client.chat.completions.create(messages=[{"role":"user","content":p}], model="llama-3.1-8b-instant", temperature=0.1)
                 embed.description = f"**AI REPUTATION INSIGHT:**\n*{c.choices[0].message.content.strip()}*"
-                embed.set_footer(text="Premium Verified Seller ✅")
             except: pass
     elif received:
-        embed.description = "💡 *[PREMIUM] AI Reputation Insights are hidden. Upgrade to Premium to unlock AI analysis.*"
+        embed.description = "💡 *[PREMIUM] AI Reputation Insights are hidden. Upgrade to unlock.*"
+
+    for msg in received[-3:]:
+        embed.add_field(name="✅ Verified Vouch", value=msg[0], inline=False)
 
     embed.set_thumbnail(url=user.avatar.url if user.avatar else None)
     await ctx.send(embed=embed)
 
 # ============================================================================
-# ✍️ VOUCH & MYVOUCHES (Always Free for Members)
+# ✍️ VOUCH & MYVOUCHES (FREE FOR ALL)
 # ============================================================================
 @bot.command()
 async def vouch(ctx, seller: discord.Member, *, message: str):
     if seller.id == ctx.author.id:
         await ctx.send("❌ Self-vouching disabled."); return
-
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('SELECT 1 FROM global_blacklist WHERE user_id = %s', (seller.id,))
     if cursor.fetchone():
-        await ctx.send("❌ **Blocked:** Seller is blacklisted."); cursor.close(); conn.close(); return
-
+        await ctx.send("❌ Blocked: Seller is blacklisted."); cursor.close(); conn.close(); return
     cursor.execute('INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) VALUES (%s, %s, %s, %s, %s, %s)', (seller.id, ctx.author.id, ctx.author.name, message, datetime.now().strftime("%Y-%m-%d %H:%M"), ctx.guild.id))
     conn.commit(); cursor.close(); conn.close()
     await ctx.send(embed=discord.Embed(title="✨ Vouch Recorded", color=0x81c784))
@@ -148,29 +148,80 @@ async def myvouches(ctx):
     embed = discord.Embed(title="📄 Your Vouch History", color=0x4fc3f7)
     for msg, time, s_id in history:
         embed.add_field(name=f"To Seller ID: {s_id} ({time})", value=msg, inline=False)
-    try: await ctx.author.send(embed=embed); await ctx.send("📬 Sent your history to DMs!")
-    except: await ctx.send("❌ Open your DMs to receive your history.")
+    try: await ctx.author.send(embed=embed); await ctx.send("📬 Sent to DMs!")
+    except: await ctx.send("❌ Open your DMs.")
 
 # ============================================================================
-# 💎 PREMIUM ONLY COMMANDS (LOCKED)
+# 💎 PREMIUM FEATURES (LOCKED)
 # ============================================================================
 @bot.command()
 async def backup(ctx):
     if not is_premium(ctx.guild.id) and ctx.author.id not in TESTER_IDS:
-        await ctx.send("🔒 **Premium Feature.** $6.99/mo required for Server Insurance. Contact **EXTEKK**.")
+        await ctx.send("🔒 **Premium Feature.** $6.99/mo required. Contact **EXTEKK**.")
         return
-    # Backup logic...
     roles = [{"name": r.name, "color": r.color.value} for r in ctx.guild.roles if not r.is_default() and not r.managed]
-    categories = [{"name": c.name, "channels": [{"name": ch.name, "type": str(ch.type)} for ch in ch.channels]} for c in ctx.guild.categories] # Fix for nesting
-    blueprint = json.dumps({"roles": roles, "categories": []}) # Shortened for snippet
+    categories = []
+    for category in ctx.guild.categories:
+        cat_data = {"name": category.name, "channels": [{"name": c.name, "type": str(c.type)} for c in category.channels]}
+        categories.append(cat_data)
+    blueprint = json.dumps({"roles": roles, "categories": categories})
     conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('INSERT INTO server_backups (server_id, blueprint, backup_date) VALUES (%s, %s, %s) ON CONFLICT (server_id) DO UPDATE SET blueprint = EXCLUDED.blueprint', (ctx.guild.id, blueprint, datetime.now()))
+    cursor.execute('INSERT INTO server_backups (server_id, blueprint, backup_date) VALUES (%s, %s, %s) ON CONFLICT (server_id) DO UPDATE SET blueprint = EXCLUDED.blueprint, backup_date = EXCLUDED.backup_date', (ctx.guild.id, blueprint, datetime.now()))
     conn.commit(); cursor.close(); conn.close()
     await ctx.send("✅ Server Layout Backed Up!")
 
-# [Include Authorize, Unflag, Restore, Import, Flag, Clearprofile below - all with Premium checks!]
-# Ensure Authorize does NOT have a premium check, obviously!
+@bot.command()
+async def restore(ctx, old_server_id: int):
+    if ctx.author.id != ADMIN_USER_ID: return
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('SELECT blueprint FROM server_backups WHERE server_id = %s', (old_server_id,))
+    row = cursor.fetchone()
+    cursor.close(); conn.close()
+    if not row:
+        await ctx.send("❓ No backup found."); return
+    blueprint = row[0]
+    if isinstance(blueprint, str): blueprint = json.loads(blueprint)
+    await ctx.send("🚀 Restoring...")
+    for r in blueprint.get('roles', []):
+        try: await ctx.guild.create_role(name=r['name'], color=discord.Color(r['color']))
+        except: pass
+    for cat in blueprint.get('categories', []):
+        new_cat = await ctx.guild.create_category(cat['name'])
+        for chan in cat['channels']:
+            if chan['type'] == 'text': await ctx.guild.create_text_channel(chan['name'], category=new_cat)
+            elif chan['type'] == 'voice': await ctx.guild.create_voice_channel(chan['name'], category=new_cat)
+    await ctx.send("✅ Restoration Complete.")
 
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def flag(ctx, user: discord.User, *, reason: str = "No reason provided"):
+    if not is_premium(ctx.guild.id) and ctx.author.id not in TESTER_IDS:
+        await ctx.send("🔒 **Premium Required.**"); return
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('INSERT INTO global_blacklist (user_id, reason, date_flagged) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason', (user.id, f"Flagged by {ctx.guild.name}: {reason}", datetime.now()))
+    conn.commit(); cursor.close(); conn.close()
+    await ctx.send("🚨 User has been flagged globally.")
+
+@bot.command()
+async def import_vouches(ctx, channel: discord.TextChannel, seller: discord.Member):
+    if not is_premium(ctx.guild.id) and ctx.author.id not in TESTER_IDS:
+        await ctx.send("🔒 **Premium Required.**"); return
+    if ctx.author.id != ADMIN_USER_ID: return
+    await ctx.send(f"⏳ Scanning {channel.mention}...")
+    count = 0
+    keywords = ["vouch", "legit", "fast", "+1", "delivered", "thanks", "✅"]
+    conn = get_db_connection(); cursor = conn.cursor()
+    async for message in channel.history(limit=100):
+        if message.author.bot or message.author.id == seller.id: continue
+        if any(key in message.content.lower() for key in keywords) or len(message.attachments) > 0:
+            cursor.execute('INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) VALUES (%s, %s, %s, %s, %s, %s)', (seller.id, message.author.id, message.author.name, message.content or "[Image]", message.created_at.strftime("%Y-%m-%d %H:%M"), ctx.guild.id))
+            count += 1
+    conn.commit(); cursor.close(); conn.close()
+    await ctx.send(f"✅ Imported {count} vouches.")
+
+# ============================================================================
+# 👑 ADMIN ONLY
+# ============================================================================
 @bot.command()
 async def authorize(ctx, server_id: int, duration: str):
     if ctx.author.id != ADMIN_USER_ID: return 
@@ -180,6 +231,14 @@ async def authorize(ctx, server_id: int, duration: str):
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('INSERT INTO subscriptions (server_id, expiry_date) VALUES (%s, %s) ON CONFLICT (server_id) DO UPDATE SET expiry_date = EXCLUDED.expiry_date', (server_id, new_expiry))
     conn.commit(); cursor.close(); conn.close()
-    await ctx.send(f"✅ Authorized {server_id} until {new_expiry.strftime('%Y-%m-%d %H:%M')}")
+    await ctx.send(f"✅ Authorized {server_id} until {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}")
+
+@bot.command()
+async def unflag(ctx, user: discord.User):
+    if ctx.author.id != ADMIN_USER_ID: return
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('DELETE FROM global_blacklist WHERE user_id = %s', (user.id,))
+    conn.commit(); cursor.close(); conn.close()
+    await ctx.send(f"✅ {user.name} unflagged.")
 
 bot.run(DISCORD_BOT_TOKEN)
