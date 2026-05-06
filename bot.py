@@ -73,46 +73,7 @@ async def on_ready():
     print(f'✅ Vouch Vault PRO Online')
 
 # ============================================================================
-# 🚨 GLOBAL SECURITY (FLAG: Admins | UNFLAG: Owner)
-# ============================================================================
-
-@bot.command()
-async def flag(ctx, user: discord.User, *, reason: str = "No reason provided"):
-    # 1. Permission Check: Must be EXTEKK, a Tester, or a Server Admin
-    is_admin = ctx.author.guild_permissions.administrator if ctx.guild else False
-    if ctx.author.id != ADMIN_USER_ID and ctx.author.id not in TESTER_IDS and not is_admin:
-        await ctx.send("❌ **Access Denied.** You need Administrator permissions to flag a scammer.")
-        return
-
-    # 2. Premium Check
-    if not is_premium(ctx.guild.id) and ctx.author.id not in TESTER_IDS:
-        await ctx.send("🔒 **Premium Required.** $6.99/mo for Global Security features.")
-        return
-
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO global_blacklist (user_id, reason, date_flagged) 
-        VALUES (%s, %s, %s)
-        ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason
-    ''', (user.id, f"Flagged by {ctx.guild.name}: {reason}", datetime.now()))
-    conn.commit(); cursor.close(); conn.close()
-
-    embed = discord.Embed(title="🚨 GLOBAL BLACKLIST UPDATED", color=0xFF0000)
-    embed.add_field(name="User Flagged", value=f"{user.name} (`{user.id}`)")
-    embed.add_field(name="Reason", value=f"```{reason}```")
-    embed.set_footer(text=f"Reported by {ctx.guild.name}")
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def unflag(ctx, user: discord.User):
-    if ctx.author.id != ADMIN_USER_ID: return # Strict lock to you
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('DELETE FROM global_blacklist WHERE user_id = %s', (user.id,))
-    conn.commit(); cursor.close(); conn.close()
-    await ctx.send(f"✅ User **{user.name}** cleared from blacklist.")
-
-# ============================================================================
-# 📊 PROFILE COMMAND (FREEMIUM)
+# 📊 PROFILE & AI INSIGHT
 # ============================================================================
 @bot.command()
 async def profile(ctx, user: discord.Member = None):
@@ -123,7 +84,7 @@ async def profile(ctx, user: discord.Member = None):
     cursor.execute('SELECT reason FROM global_blacklist WHERE user_id = %s', (user.id,))
     blacklisted = cursor.fetchone()
     if blacklisted:
-        await ctx.send(embed=discord.Embed(title="⚠️ BLACKLISTED", description=f"WARNING: {user.mention} is a flagged scammer!\nReason: {blacklisted[0]}", color=0xFF0000))
+        await ctx.send(embed=discord.Embed(title="⚠️ BLACKLISTED", description=f"WARNING: {user.mention} is flagged for scamming!", color=0xFF0000))
         cursor.close(); conn.close(); return
 
     cursor.execute('SELECT content FROM vouches WHERE seller_id = %s', (user.id,))
@@ -161,18 +122,67 @@ async def profile(ctx, user: discord.Member = None):
     await ctx.send(embed=embed)
 
 # ============================================================================
-# 📥 BACKUP / RESTORE / IMPORT / VOUCH / AUTHORIZE
+# 📄 MEMBER COMMAND: !myvouches (STABLE)
 # ============================================================================
+@bot.command()
+async def myvouches(ctx):
+    await ctx.send("⏳ **Accessing the Vault...** checking your transaction history.")
+    
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('SELECT content, timestamp, seller_id, origin_server_id FROM vouches WHERE customer_id = %s ORDER BY id DESC LIMIT 10', (ctx.author.id,))
+    history = cursor.fetchall()
+    cursor.close(); conn.close()
+    
+    if not history:
+        await ctx.send("❓ **No history found.** You haven't left any vouches yet!")
+        return
 
+    embed = discord.Embed(title="📄 Your Vouch History (Last 10)", color=0x4fc3f7)
+    
+    for msg, time, s_id, g_id in history:
+        # Try to find the username
+        try:
+            user_obj = await bot.fetch_user(s_id)
+            seller_name = user_obj.name
+        except:
+            seller_name = f"User({s_id})"
+            
+        # Try to find the server name
+        guild_obj = bot.get_guild(g_id)
+        server_name = guild_obj.name if guild_obj else "Private/Deleted Server"
+        
+        embed.add_field(name=f"To {seller_name} in {server_name}", value=f"*{time}*\n> {msg}", inline=False)
+
+    try:
+        await ctx.author.send(embed=embed)
+        await ctx.send(f"📬 {ctx.author.mention}, I've sent your history to your DMs!")
+    except:
+        await ctx.send(f"❌ {ctx.author.mention}, **I couldn't DM you!** Please open your DMs in Privacy Settings.")
+
+# ============================================================================
+# ✍️ VOUCH COMMAND
+# ============================================================================
+@bot.command()
+async def vouch(ctx, seller: discord.Member, *, message: str):
+    if seller.id == ctx.author.id:
+        await ctx.send("❌ Self-vouching disabled."); return
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute('SELECT 1 FROM global_blacklist WHERE user_id = %s', (seller.id,))
+    if cursor.fetchone():
+        await ctx.send("❌ Blocked: Seller is blacklisted."); cursor.close(); conn.close(); return
+    cursor.execute('INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) VALUES (%s, %s, %s, %s, %s, %s)', (seller.id, ctx.author.id, ctx.author.name, message, datetime.now().strftime("%Y-%m-%d %H:%M"), ctx.guild.id))
+    conn.commit(); cursor.close(); conn.close()
+    await ctx.send(embed=discord.Embed(title="✨ Vouch Recorded", color=0x81c784))
+
+# ============================================================================
+# 🔄 BACKUP / RESTORE / SECURITY
+# ============================================================================
 @bot.command()
 async def backup(ctx):
     if not is_premium(ctx.guild.id) and ctx.author.id not in TESTER_IDS:
-        await ctx.send("🔒 **Premium Feature.** $6.99/mo required."); return
+        await ctx.send("🔒 **Premium Feature.**"); return
     roles = [{"name": r.name, "color": r.color.value} for r in ctx.guild.roles if not r.is_default() and not r.managed]
-    categories = []
-    for category in ctx.guild.categories:
-        cat_data = {"name": category.name, "channels": [{"name": c.name, "type": str(c.type)} for c in category.channels]}
-        categories.append(cat_data)
+    categories = [{"name": c.name, "channels": [{"name": ch.name, "type": str(ch.type)} for ch in ch.channels]} for c in ctx.guild.categories]
     blueprint = json.dumps({"roles": roles, "categories": categories})
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('INSERT INTO server_backups (server_id, blueprint, backup_date) VALUES (%s, %s, %s) ON CONFLICT (server_id) DO UPDATE SET blueprint = EXCLUDED.blueprint', (ctx.guild.id, blueprint, datetime.now()))
@@ -202,16 +212,16 @@ async def restore(ctx, old_server_id: int):
     await ctx.send("✅ Restoration Complete.")
 
 @bot.command()
-async def vouch(ctx, seller: discord.Member, *, message: str):
-    if seller.id == ctx.author.id:
-        await ctx.send("❌ Self-vouching disabled."); return
+async def flag(ctx, user: discord.User, *, reason: str = "No reason provided"):
+    is_admin = ctx.author.guild_permissions.administrator if ctx.guild else False
+    if ctx.author.id != ADMIN_USER_ID and ctx.author.id not in TESTER_IDS and not is_admin:
+        await ctx.send("❌ Access Denied."); return
+    if not is_premium(ctx.guild.id) and ctx.author.id not in TESTER_IDS:
+        await ctx.send("🔒 Premium Required."); return
     conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute('SELECT 1 FROM global_blacklist WHERE user_id = %s', (seller.id,))
-    if cursor.fetchone():
-        await ctx.send("❌ Blocked: Seller is blacklisted."); cursor.close(); conn.close(); return
-    cursor.execute('INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) VALUES (%s, %s, %s, %s, %s, %s)', (seller.id, ctx.author.id, ctx.author.name, message, datetime.now().strftime("%Y-%m-%d %H:%M"), ctx.guild.id))
+    cursor.execute('INSERT INTO global_blacklist (user_id, reason, date_flagged) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason', (user.id, f"Flagged by {ctx.guild.name}: {reason}", datetime.now()))
     conn.commit(); cursor.close(); conn.close()
-    await ctx.send(embed=discord.Embed(title="✨ Vouch Recorded", color=0x81c784))
+    await ctx.send("🚨 User flagged globally.")
 
 @bot.command()
 async def authorize(ctx, server_id: int, duration: str):
@@ -222,23 +232,14 @@ async def authorize(ctx, server_id: int, duration: str):
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute('INSERT INTO subscriptions (server_id, expiry_date) VALUES (%s, %s) ON CONFLICT (server_id) DO UPDATE SET expiry_date = EXCLUDED.expiry_date', (server_id, new_expiry))
     conn.commit(); cursor.close(); conn.close()
-    await ctx.send(f"✅ Authorized {server_id} until {new_expiry.strftime('%Y-%m-%d %H:%M:%S')}")
+    await ctx.send(f"✅ Authorized {server_id}")
 
 @bot.command()
-async def import_vouches(ctx, channel: discord.TextChannel, seller: discord.Member):
-    if not is_premium(ctx.guild.id) and ctx.author.id not in TESTER_IDS:
-        await ctx.send("🔒 **Premium Required.**"); return
+async def unflag(ctx, user: discord.User):
     if ctx.author.id != ADMIN_USER_ID: return
-    await ctx.send(f"⏳ Scanning {channel.mention}...")
-    count = 0
-    keywords = ["vouch", "legit", "fast", "+1", "delivered", "thanks", "✅"]
     conn = get_db_connection(); cursor = conn.cursor()
-    async for message in channel.history(limit=100):
-        if message.author.bot or message.author.id == seller.id: continue
-        if any(key in message.content.lower() for key in keywords) or len(message.attachments) > 0:
-            cursor.execute('INSERT INTO vouches (seller_id, customer_id, customer_name, content, timestamp, origin_server_id) VALUES (%s, %s, %s, %s, %s, %s)', (seller.id, message.author.id, message.author.name, message.content or "[Image]", message.created_at.strftime("%Y-%m-%d %H:%M"), ctx.guild.id))
-            count += 1
+    cursor.execute('DELETE FROM global_blacklist WHERE user_id = %s', (user.id,))
     conn.commit(); cursor.close(); conn.close()
-    await ctx.send(f"✅ Imported {count} vouches.")
+    await ctx.send(f"✅ {user.name} unflagged.")
 
 bot.run(DISCORD_BOT_TOKEN)
